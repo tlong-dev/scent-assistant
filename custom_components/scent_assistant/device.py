@@ -36,6 +36,7 @@ from .protocol_ble import (
     AromelyAroMaxProtocol,
     get_protocol,
     detect_device_type,
+    al_reassemble,
 )
 from .protocol_cloud import AromaLinkCloudClient
 
@@ -82,6 +83,8 @@ class ScentDiffuserDevice:
         self._gw_password = gw_password or None
         # Trace ring-buffer for the diagnostics download.
         self._recent_notifications: list[str] = []
+        # Carry buffer for multi-chunk Aroma-Link notifications.
+        self._al_rx_buf = bytearray()
         self._recent_commands: list[str] = []
         # BLE
         self._ble_address = ble_address
@@ -609,6 +612,13 @@ class ScentDiffuserDevice:
         self._recent_notifications.append(raw.hex())
         if len(self._recent_notifications) > 20:
             del self._recent_notifications[0]
+        if isinstance(self._protocol, AromaLinkBleProtocol):
+            # Large AL replies (e.g. the 52 15 schedule read-back) span
+            # multiple GATT notifications; wait for the complete frame.
+            self._al_rx_buf, frame = al_reassemble(self._al_rx_buf, raw)
+            if frame is None:
+                return
+            raw = frame
         updates = self._protocol.parse_notification(raw)
         if not updates:
             return

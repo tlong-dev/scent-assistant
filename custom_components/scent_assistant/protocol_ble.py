@@ -348,6 +348,33 @@ class TuyaBleProtocol(BleProtocol):
         return result
 
 
+# Aroma-Link replies larger than the negotiated ATT payload (notably the
+# ~324-byte `52 15` weekly-schedule read-back) arrive as multiple GATT
+# notifications: the first chunk starts with AL_HEADER, continuations are
+# raw fragments, and AL_TRAILER closes the frame. Sometimes the stack
+# delivers the whole frame in one notification instead - both shapes are
+# handled here. Feed every notification through al_reassemble(); it
+# returns (carry_buffer, complete_frame_or_None).
+AL_MAX_FRAME = 1024
+
+
+def al_reassemble(buf: bytearray, chunk: bytes) -> tuple[bytearray, bytes | None]:
+    """Accumulate Aroma-Link notification chunks into complete frames."""
+    if chunk[:3] == AL_HEADER:
+        buf = bytearray(chunk)   # new frame (also drops any stale partial)
+    elif buf:
+        buf.extend(chunk)
+    else:
+        # Headerless orphan with nothing buffered: pass through unchanged
+        # so non-framed data behaves exactly as before.
+        return bytearray(), bytes(chunk)
+    if len(buf) >= 6 and buf[-3:] == bytes(AL_TRAILER):
+        return bytearray(), bytes(buf)
+    if len(buf) > AL_MAX_FRAME:
+        return bytearray(), None
+    return buf, None
+
+
 # ---------------------------------------------------------------------------
 # Aroma-Link custom protocol
 # ---------------------------------------------------------------------------
@@ -522,6 +549,45 @@ class AromaLinkBleProtocol(BleProtocol):
                 result["start_minute"] = payload[8]
                 result["end_hour"] = payload[9]
                 result["end_minute"] = payload[10]
+
+        elif cmd == AL_CMD_QUERY and sub == AL_SUB_QUERY_SCHEDULES and len(payload) >= 47:
+            # Weekly schedule read-back - the reply to our own `52 15`
+            # build_query, which was previously sent every refresh but
+            # never parsed. Layout observed on a Smart.A5.WIFI (AromaDD):
+            # after the `52 15` echo, 7 day-blocks (Mon..Sun), each 5
+            # slots x 9 bytes mirroring the 57 16 write format:
+            #   [sH sM eH eM flags work_u16 pause_u16]
+            # with flags 0x11 = enabled, 0x10 = disabled. This is the only
+            # frame that reports the CONFIGURED durations (53 09 carries
+            # live countdowns on this firmware), so it is what keeps the
+            # Work/Pause Duration numbers truthful.
+            body = payload[2:]
+            first_enabled = None
+            for day in range(7):
+                day_off = day * 45
+                if day_off + 45 > len(body):
+                    break
+                for slot in range(5):
+                    off = day_off + slot * 9
+                    if body[off + 4] == AL_SLOT_ENABLED:
+                        first_enabled = bytes(body[off:off + 9])
+                        break
+                if first_enabled is not None:
+                    break
+            if first_enabled is not None:
+                result["schedule_enabled"] = True
+                result["start_hour"] = first_enabled[0]
+                result["start_minute"] = first_enabled[1]
+                result["end_hour"] = first_enabled[2]
+                result["end_minute"] = first_enabled[3]
+                work = (first_enabled[5] << 8) | first_enabled[6]
+                pause = (first_enabled[7] << 8) | first_enabled[8]
+                if 0 < work <= 0xFFFF:
+                    result["work_seconds"] = work
+                if 0 < pause <= 0xFFFF:
+                    result["pause_seconds"] = pause
+            else:
+                result["schedule_enabled"] = False
 
         elif cmd == AL_CMD_QUERY and sub == AL_SUB_OIL_LEVEL and len(payload) >= 3:
             # Read-register reply for the liquid level: `52 1E <percent>`.
