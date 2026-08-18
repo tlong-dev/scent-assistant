@@ -402,10 +402,10 @@ CLOUD_SCHEDULE_REFRESH_EVERY = 10
 CLOUD_POLL_INTERVAL_SECONDS = 60
 # BLE devices are only connected for ~10s around each command, so GATT
 # notifications cannot serve as a state channel in practice. Poll at a
-# slower cadence than cloud: each poll is a full connect/query/disconnect
-# cycle and competes with the phone app for the device's single BLE
-# connection slot.
-BLE_POLL_INTERVAL_SECONDS = 300
+# In hold-connection mode the link stays up, so each poll is a cheap
+# in-link query; the cadence also bounds how fast a dropped link is
+# noticed and re-established.
+BLE_POLL_INTERVAL_SECONDS = 60
 
 # ---------------------------------------------------------------------------
 # Weekday bitmask (shared by both protocols)
