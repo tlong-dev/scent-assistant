@@ -323,6 +323,7 @@ class ScentDiffuserDevice:
                     BleakClient,
                     target,
                     self._ble_name or self._ble_address,
+                    disconnected_callback=self._on_ble_disconnected,
                     max_attempts=BLE_CONNECT_MAX_ATTEMPTS,
                 )
                 self._ble_connected = True
@@ -338,12 +339,34 @@ class ScentDiffuserDevice:
                         self._protocol.notify_char_uuid, self._on_ble_notification
                     )
                     self._ble_notify_subscribed = True
-                except Exception as err:
-                    self._ble_notify_subscribed = False
-                    _LOGGER.warning(
-                        "BLE start_notify failed on %s (%s): %s",
-                        self._ble_name, self._protocol.notify_char_uuid, err,
-                    )
+                except Exception as first_err:
+                    # One settle-and-retry: after an abrupt link drop the
+                    # proxy's GATT stack sometimes needs a beat before it
+                    # will accept a new subscription (observed as "Timeout
+                    # waiting for BluetoothGATTNotifyResponse" immediately
+                    # after a ~10min session drop).
+                    await asyncio.sleep(2.0)
+                    try:
+                        await self._ble_client.start_notify(
+                            self._protocol.notify_char_uuid, self._on_ble_notification
+                        )
+                        self._ble_notify_subscribed = True
+                    except Exception as err:
+                        # A connection without a notify subscription is
+                        # deaf: writes succeed but no reply ever reaches
+                        # us, so state silently freezes while everything
+                        # "works". Treat it as a FAILED connection and let
+                        # the next poll tick retry from scratch.
+                        self._ble_notify_subscribed = False
+                        _LOGGER.warning(
+                            "BLE start_notify failed on %s (%s): %s (first: %s) "
+                            "- treating connection as failed",
+                            self._ble_name, self._protocol.notify_char_uuid,
+                            err, first_err,
+                        )
+                        await self._teardown_ble_client(reason="notify-subscribe-failed")
+                        self._ble_last_failure_ts = loop.time()
+                        return False
 
                 # Scent Marketing AK family — PIN 8888 login must precede
                 # every other write, otherwise the device drops them
@@ -612,6 +635,14 @@ class ScentDiffuserDevice:
         # Wait briefly for notification response
         await asyncio.sleep(1.0)
         return success
+
+    def _on_ble_disconnected(self, _client: BleakClient) -> None:
+        """Peripheral or proxy dropped the link - mark state so the next
+        poll tick reconnects instead of trusting a stale is_connected."""
+        _LOGGER.debug("BLE link to %s dropped", self._ble_name)
+        self._ble_connected = False
+        self._ble_notify_subscribed = False
+        self._al_rx_buf = bytearray()
 
     def _on_ble_notification(self, sender: int, data: bytearray) -> None:
         """Handle incoming BLE notification."""
