@@ -400,6 +400,12 @@ CLOUD_SCHEDULE_REFRESH_EVERY = 10
 # user-initiated commands. The Aroma-Link cloud exposes near-real-time state
 # (onOff, workStatus, work/pauseRemainTime, pumpCount) via /v1/app/device/work/{id}.
 CLOUD_POLL_INTERVAL_SECONDS = 60
+# BLE devices are only connected for ~10s around each command, so GATT
+# notifications cannot serve as a state channel in practice. Poll at a
+# slower cadence than cloud: each poll is a full connect/query/disconnect
+# cycle and competes with the phone app for the device's single BLE
+# connection slot.
+BLE_POLL_INTERVAL_SECONDS = 300
 
 # ---------------------------------------------------------------------------
 # Weekday bitmask (shared by both protocols)

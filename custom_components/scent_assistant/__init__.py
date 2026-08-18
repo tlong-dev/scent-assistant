@@ -21,6 +21,7 @@ from .const import (
     CONF_CLOUD_PASSWORD,
     CONF_CLOUD_DEVICE_ID,
     CONF_CONNECTION_MODE,
+    BLE_POLL_INTERVAL_SECONDS,
     CLOUD_POLL_INTERVAL_SECONDS,
     WEEKDAY_MON, WEEKDAY_TUE, WEEKDAY_WED, WEEKDAY_THU,
     WEEKDAY_FRI, WEEKDAY_SAT, WEEKDAY_SUN,
@@ -124,6 +125,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             timedelta(seconds=CLOUD_POLL_INTERVAL_SECONDS),
         )
 
+    # BLE devices do push notifications, but only while connected — and the
+    # idle-disconnect design means they are connected ~10s around each
+    # command. Between commands there is no state channel at all: optimistic
+    # entity state goes stale and query-driven registers (e.g. Aroma-Link's
+    # oil level) are never re-read. Poll refresh_state() periodically, at a
+    # slower cadence than cloud mode since each poll occupies the device's
+    # single BLE connection slot. See BLE_POLL_INTERVAL_SECONDS in const.py.
+    elif connection_mode == "ble":
+        async def _periodic_ble_poll(now=None) -> None:
+            try:
+                await device.refresh_state()
+            except Exception as err:
+                _LOGGER.debug("BLE state poll failed (will retry): %s", err)
+
+        device._unsub_ble_poll = async_track_time_interval(
+            hass,
+            _periodic_ble_poll,
+            timedelta(seconds=BLE_POLL_INTERVAL_SECONDS),
+        )
+
     # Register services (once for all entries)
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE):
         async def handle_set_schedule(call: ServiceCall) -> None:
@@ -188,9 +209,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         device: ScentDiffuserDevice = hass.data[DOMAIN].pop(entry.entry_id)
-        unsub = getattr(device, "_unsub_cloud_poll", None)
-        if unsub is not None:
-            unsub()
+        for attr in ("_unsub_cloud_poll", "_unsub_ble_poll"):
+            unsub = getattr(device, attr, None)
+            if unsub is not None:
+                unsub()
         await device.async_shutdown()
 
     return unload_ok
