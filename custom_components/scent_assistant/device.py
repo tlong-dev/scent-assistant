@@ -607,7 +607,8 @@ class ScentDiffuserDevice:
         raw = bytes(data)
         # Keep a short ring-buffer of raw frames for the diagnostics export.
         self._recent_notifications.append(raw.hex())
-        if len(self._recent_notifications) > 20:
+        _LOGGER.info("AL raw notification: %s", raw.hex())
+        if len(self._recent_notifications) > 60:
             del self._recent_notifications[0]
         updates = self._protocol.parse_notification(raw)
         if not updates:
@@ -1118,6 +1119,23 @@ class ScentDiffuserDevice:
                     if work_query is not None:
                         await self._ble_send(work_query())
                         await asyncio.sleep(0.3)
+                    # --- PROBE (temporary, tlong/probe_schedule_read) ---
+                    # Speculative reads hunting for the schedule read-back
+                    # register the official app uses (it can display the
+                    # stored work/pause durations, so a read exists). 0x52
+                    # is the AL query command; any reply lands in
+                    # _on_ble_notification and is captured raw in
+                    # recent_notifications_hex + logged at INFO below.
+                    if isinstance(self._protocol, AromaLinkBleProtocol):
+                        for reg in (0x16, 0x09, 0x08, 0x03, 0x17, 0x05):
+                            probe = self._protocol._build_packet(bytes([0x52, reg]))
+                            _LOGGER.info("AL probe: sending 52 %02X (%s)", reg, probe.hex())
+                            try:
+                                await self._ble_send(probe)
+                            except Exception as err:
+                                _LOGGER.info("AL probe 52 %02X failed: %s", reg, err)
+                                break
+                            await asyncio.sleep(0.5)
                 except (BleakError, asyncio.TimeoutError, OSError) as err:
                     _LOGGER.debug("BLE refresh query failed on %s: %s", self._ble_name, err)
                     self._ble_last_failure_ts = asyncio.get_event_loop().time()
