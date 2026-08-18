@@ -21,6 +21,7 @@ from .const import (
     CONF_CLOUD_PASSWORD,
     CONF_CLOUD_DEVICE_ID,
     CONF_CONNECTION_MODE,
+    BLE_FAST_POLL_INTERVAL_SECONDS,
     BLE_POLL_INTERVAL_SECONDS,
     CLOUD_POLL_INTERVAL_SECONDS,
     WEEKDAY_MON, WEEKDAY_TUE, WEEKDAY_WED, WEEKDAY_THU,
@@ -145,6 +146,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             timedelta(seconds=BLE_POLL_INTERVAL_SECONDS),
         )
 
+        async def _fast_ble_poll(now=None) -> None:
+            try:
+                await device.poll_work_status()
+            except Exception as err:
+                _LOGGER.debug("BLE fast poll failed (will retry): %s", err)
+
+        device._unsub_ble_fast_poll = async_track_time_interval(
+            hass,
+            _fast_ble_poll,
+            timedelta(seconds=BLE_FAST_POLL_INTERVAL_SECONDS),
+        )
+
     # Register services (once for all entries)
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE):
         async def handle_set_schedule(call: ServiceCall) -> None:
@@ -209,7 +222,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         device: ScentDiffuserDevice = hass.data[DOMAIN].pop(entry.entry_id)
-        for attr in ("_unsub_cloud_poll", "_unsub_ble_poll"):
+        for attr in ("_unsub_cloud_poll", "_unsub_ble_poll", "_unsub_ble_fast_poll"):
             unsub = getattr(device, attr, None)
             if unsub is not None:
                 unsub()

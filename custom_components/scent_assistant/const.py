@@ -402,10 +402,14 @@ CLOUD_SCHEDULE_REFRESH_EVERY = 10
 CLOUD_POLL_INTERVAL_SECONDS = 60
 # BLE devices are only connected for ~10s around each command, so GATT
 # notifications cannot serve as a state channel in practice. Poll at a
-# In hold-connection mode the link stays up, so each poll is a cheap
-# in-link query; the cadence also bounds how fast a dropped link is
-# noticed and re-established.
-BLE_POLL_INTERVAL_SECONDS = 60
+# In hold-connection mode the link stays up, so polling splits into two
+# cadences: BLE_FAST_POLL_INTERVAL_SECONDS sends only the lightweight
+# all-work-info query (52 0A: phase + countdowns) and doubles as the
+# reconnect watchdog after a link drop; BLE_POLL_INTERVAL_SECONDS runs
+# the full refresh (schedule read-back 52 15 + oil 52 1E), whose answers
+# only change when someone edits config or the oil level moves.
+BLE_FAST_POLL_INTERVAL_SECONDS = 10
+BLE_POLL_INTERVAL_SECONDS = 300
 
 # ---------------------------------------------------------------------------
 # Weekday bitmask (shared by both protocols)

@@ -1118,6 +1118,30 @@ class ScentDiffuserDevice:
 
         return False
 
+    async def poll_work_status(self) -> None:
+        """Lightweight fast poll: query live work status only (`52 0A`).
+
+        Sent by the fast BLE timer in hold-connection mode. Reconnects via
+        _ble_connect() when the link has dropped, which makes this timer
+        the reconnect watchdog as well. Protocols without an all-work
+        query fall back to doing nothing here (the slow full refresh
+        still covers them).
+        """
+        if not self._ble_address:
+            return
+        work_query = getattr(self._protocol, "build_all_work_query", None)
+        if work_query is None:
+            return
+        if not await self._ble_connect():
+            return
+        try:
+            await self._ble_send(work_query())
+        except (BleakError, asyncio.TimeoutError, OSError) as err:
+            _LOGGER.debug("BLE fast poll failed on %s: %s", self._ble_name, err)
+            self._ble_last_failure_ts = asyncio.get_event_loop().time()
+            async with self._ble_lock:
+                await self._teardown_ble_client(reason="fast-poll-failure")
+
     async def refresh_state(self) -> None:
         """Refresh device state."""
         if self._ble_address:
