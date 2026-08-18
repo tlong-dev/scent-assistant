@@ -506,8 +506,18 @@ class AromaLinkBleProtocol(BleProtocol):
                 elif phase_byte == AL_PHASE_PAUSED:
                     result["phase"] = "paused"
 
-                result["work_seconds"] = (payload[3] << 8) | payload[4]
-                result["pause_seconds"] = (payload[5] << 8) | payload[6]
+                # Bytes [3..6] are deliberately NOT mapped into
+                # work_seconds/pause_seconds. The app's handler reads them as
+                # the configured work/pause durations, but at least some
+                # firmwares (observed: "Smart.A5.WIFI" Aroma-Link module,
+                # AromaDD-branded) report the live phase countdowns here
+                # instead - captured as pause_seconds=36 in the same refresh
+                # where the 0x0A frame reported pause_remaining=35, both
+                # ticking down in lockstep. Mapping them overwrites the
+                # user's configured durations with a countdown snapshot (a
+                # config Number entity that visibly counts down). Countdowns
+                # already arrive via the trusted 0x0A all-work-info frame;
+                # the duration numbers keep the last value written to them.
                 result["start_hour"] = payload[7]
                 result["start_minute"] = payload[8]
                 result["end_hour"] = payload[9]
