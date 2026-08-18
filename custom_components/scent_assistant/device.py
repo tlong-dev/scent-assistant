@@ -42,7 +42,13 @@ from .protocol_cloud import AromaLinkCloudClient
 _LOGGER = logging.getLogger(__name__)
 
 # Disconnect BLE after this many seconds of inactivity
-BLE_IDLE_DISCONNECT_SECONDS = 10
+# None = hold-connection mode: never tear the link down on idle. The
+# periodic poll (BLE_POLL_INTERVAL_SECONDS) then doubles as keepalive and
+# as the reconnect watchdog after a link drop. Trade-off: while HA holds
+# the connection the official phone app cannot connect (single-slot BLE),
+# and long-held sessions are unproven on some firmwares - this mode is
+# being shaken down against an Aroma-Link Smart.A5 before wider use.
+BLE_IDLE_DISCONNECT_SECONDS: int | None = None
 # Cooldown after a failed connect / write before we try again, so a
 # stuck device gets a chance to recover instead of being hammered.
 BLE_FAILURE_COOLDOWN_SECONDS = 3.0
@@ -474,6 +480,8 @@ class ScentDiffuserDevice:
         """Schedule BLE disconnect after idle period."""
         if self._ble_disconnect_task and not self._ble_disconnect_task.done():
             self._ble_disconnect_task.cancel()
+        if BLE_IDLE_DISCONNECT_SECONDS is None:
+            return
         self._ble_disconnect_task = asyncio.ensure_future(self._delayed_disconnect())
 
     async def _delayed_disconnect(self) -> None:
