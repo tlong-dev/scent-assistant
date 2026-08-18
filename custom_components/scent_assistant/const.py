@@ -408,7 +408,7 @@ CLOUD_POLL_INTERVAL_SECONDS = 60
 # reconnect watchdog after a link drop; BLE_POLL_INTERVAL_SECONDS runs
 # the full refresh (schedule read-back 52 15 + oil 52 1E), whose answers
 # only change when someone edits config or the oil level moves.
-BLE_FAST_POLL_INTERVAL_SECONDS = 10
+BLE_FAST_POLL_INTERVAL_SECONDS = 4
 BLE_POLL_INTERVAL_SECONDS = 300
 
 # ---------------------------------------------------------------------------
