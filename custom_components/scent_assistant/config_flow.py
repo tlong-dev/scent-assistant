@@ -8,7 +8,15 @@ import voluptuous as vol
 from bleak import BleakScanner
 
 from homeassistant import config_entries
+from homeassistant.core import callback
 from .const import (
+    BLE_FAST_POLL_INTERVAL_SECONDS,
+    BLE_POLL_INTERVAL_SECONDS,
+    BLE_UNAVAILABLE_AFTER_SECONDS,
+    OPT_FAST_POLL_INTERVAL,
+    OPT_HOLD_CONNECTION,
+    OPT_REFRESH_INTERVAL,
+    OPT_UNAVAILABLE_AFTER,
     DOMAIN,
     CONF_DEVICE_TYPE,
     CONF_BLE_ADDRESS,
@@ -28,10 +36,53 @@ from .protocol_cloud import AromaLinkCloudClient
 _LOGGER = logging.getLogger(__name__)
 
 
+class ScentOptionsFlowHandler(config_entries.OptionsFlow):
+    """BLE behavior tuning (Settings -> Devices & Services -> Configure)."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None):
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        opts = self.config_entry.options
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    OPT_HOLD_CONNECTION,
+                    default=opts.get(OPT_HOLD_CONNECTION, True),
+                ): bool,
+                vol.Optional(
+                    OPT_FAST_POLL_INTERVAL,
+                    default=opts.get(
+                        OPT_FAST_POLL_INTERVAL, BLE_FAST_POLL_INTERVAL_SECONDS
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=2, max=300)),
+                vol.Optional(
+                    OPT_REFRESH_INTERVAL,
+                    default=opts.get(
+                        OPT_REFRESH_INTERVAL, BLE_POLL_INTERVAL_SECONDS
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=30, max=3600)),
+                vol.Optional(
+                    OPT_UNAVAILABLE_AFTER,
+                    default=opts.get(
+                        OPT_UNAVAILABLE_AFTER, BLE_UNAVAILABLE_AFTER_SECONDS
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=15, max=3600)),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)
+
+
 class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle config flow for Scent Diffuser."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> ScentOptionsFlowHandler:
+        return ScentOptionsFlowHandler()
 
     def __init__(self) -> None:
         self._discovered_devices: dict[str, dict] = {}
