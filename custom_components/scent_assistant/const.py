@@ -414,6 +414,18 @@ BLE_FAST_POLL_INTERVAL_SECONDS = 4
 # seconds; 60s of silence means the link is down or the device has
 # zombie-wedged - either way, showing stale values as live is a lie.
 BLE_UNAVAILABLE_AFTER_SECONDS = 60
+
+# Config-entry option keys (Settings -> Devices & Services -> Configure).
+# Defaults fall back to the constants above so existing installs are
+# unchanged until the user opens the options form.
+OPT_HOLD_CONNECTION = "hold_connection"
+OPT_FAST_POLL_INTERVAL = "fast_poll_interval"
+OPT_REFRESH_INTERVAL = "refresh_interval"
+OPT_UNAVAILABLE_AFTER = "unavailable_after"
+# Idle-disconnect used when hold_connection is turned OFF - the original
+# connect-on-demand behavior (clean disconnect after each operation),
+# which some firmwares need because held sessions wedge them.
+BLE_IDLE_DISCONNECT_FALLBACK_SECONDS = 10
 BLE_POLL_INTERVAL_SECONDS = 300
 
 # ---------------------------------------------------------------------------

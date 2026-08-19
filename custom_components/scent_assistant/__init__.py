@@ -24,6 +24,11 @@ from .const import (
     CONF_CONNECTION_MODE,
     BLE_FAST_POLL_INTERVAL_SECONDS,
     BLE_POLL_INTERVAL_SECONDS,
+    BLE_UNAVAILABLE_AFTER_SECONDS,
+    OPT_FAST_POLL_INTERVAL,
+    OPT_HOLD_CONNECTION,
+    OPT_REFRESH_INTERVAL,
+    OPT_UNAVAILABLE_AFTER,
     CLOUD_POLL_INTERVAL_SECONDS,
     WEEKDAY_MON, WEEKDAY_TUE, WEEKDAY_WED, WEEKDAY_THU,
     WEEKDAY_FRI, WEEKDAY_SAT, WEEKDAY_SUN,
@@ -110,6 +115,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = device
 
+    async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+        await hass.config_entries.async_reload(entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     # Close the BLE session cleanly when HA stops. async_unload_entry only
     # runs on entry unload/reload - NOT on core shutdown - so without this
     # every HA restart drops the link uncleanly, which zombie-wedges some
@@ -147,6 +157,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # slower cadence than cloud mode since each poll occupies the device's
     # single BLE connection slot. See BLE_POLL_INTERVAL_SECONDS in const.py.
     elif connection_mode == "ble":
+        ble_fast = entry.options.get(
+            OPT_FAST_POLL_INTERVAL, BLE_FAST_POLL_INTERVAL_SECONDS
+        )
+        ble_slow = entry.options.get(
+            OPT_REFRESH_INTERVAL, BLE_POLL_INTERVAL_SECONDS
+        )
+        device.configure_ble_behavior(
+            hold_connection=entry.options.get(OPT_HOLD_CONNECTION, True),
+            unavailable_after=entry.options.get(
+                OPT_UNAVAILABLE_AFTER, BLE_UNAVAILABLE_AFTER_SECONDS
+            ),
+        )
+
         async def _periodic_ble_poll(now=None) -> None:
             try:
                 await device.refresh_state()
@@ -156,7 +179,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device._unsub_ble_poll = async_track_time_interval(
             hass,
             _periodic_ble_poll,
-            timedelta(seconds=BLE_POLL_INTERVAL_SECONDS),
+            timedelta(seconds=ble_slow),
         )
 
         async def _fast_ble_poll(now=None) -> None:
@@ -168,7 +191,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device._unsub_ble_fast_poll = async_track_time_interval(
             hass,
             _fast_ble_poll,
-            timedelta(seconds=BLE_FAST_POLL_INTERVAL_SECONDS),
+            timedelta(seconds=ble_fast),
         )
 
     # Register services (once for all entries)

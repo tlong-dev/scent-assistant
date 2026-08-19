@@ -41,5 +41,18 @@
     "abort": {
       "already_configured": "Device is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BLE behavior",
+        "data": {
+          "hold_connection": "Hold the BLE connection (fast updates; blocks the phone app)",
+          "fast_poll_interval": "Status poll interval (seconds)",
+          "refresh_interval": "Full config/oil refresh interval (seconds)",
+          "unavailable_after": "Mark unavailable after silence (seconds)"
+        }
+      }
+    }
   }
 }

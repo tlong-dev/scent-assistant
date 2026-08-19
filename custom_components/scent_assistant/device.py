@@ -17,6 +17,7 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    BLE_IDLE_DISCONNECT_FALLBACK_SECONDS,
     BLE_UNAVAILABLE_AFTER_SECONDS,
     DeviceType,
     CLOUD_SCHEDULE_REFRESH_EVERY,
@@ -98,6 +99,9 @@ class ScentDiffuserDevice:
         self._ble_last_rx: float = 0.0
         self._ble_unavailable_after: float = BLE_UNAVAILABLE_AFTER_SECONDS
         self._was_available: bool = True
+        # None = hold the connection (never idle-disconnect); a number =
+        # seconds of idle before a clean disconnect (connect-on-demand).
+        self._ble_idle_disconnect: float | None = BLE_IDLE_DISCONNECT_SECONDS
         self._recent_commands: list[str] = []
         # BLE
         self._ble_address = ble_address
@@ -546,13 +550,13 @@ class ScentDiffuserDevice:
         """Schedule BLE disconnect after idle period."""
         if self._ble_disconnect_task and not self._ble_disconnect_task.done():
             self._ble_disconnect_task.cancel()
-        if BLE_IDLE_DISCONNECT_SECONDS is None:
+        if self._ble_idle_disconnect is None:
             return
         self._ble_disconnect_task = asyncio.ensure_future(self._delayed_disconnect())
 
     async def _delayed_disconnect(self) -> None:
         """Disconnect BLE after idle timeout."""
-        await asyncio.sleep(BLE_IDLE_DISCONNECT_SECONDS)
+        await asyncio.sleep(self._ble_idle_disconnect)
         async with self._ble_lock:
             await self._teardown_ble_client(reason="idle")
 
@@ -1189,6 +1193,15 @@ class ScentDiffuserDevice:
             return success
 
         return False
+
+    def configure_ble_behavior(
+        self, *, hold_connection: bool, unavailable_after: float
+    ) -> None:
+        """Apply config-entry options (called from async_setup_entry)."""
+        self._ble_idle_disconnect = (
+            None if hold_connection else float(BLE_IDLE_DISCONNECT_FALLBACK_SECONDS)
+        )
+        self._ble_unavailable_after = float(unavailable_after)
 
     async def poll_work_status(self) -> None:
         """Lightweight fast poll: query live work status only (`52 0A`).
