@@ -361,6 +361,17 @@ AL_MAX_FRAME = 1024
 def al_reassemble(buf: bytearray, chunk: bytes) -> tuple[bytearray, bytes | None]:
     """Accumulate Aroma-Link notification chunks into complete frames."""
     if chunk[:3] == AL_HEADER:
+        if (
+            buf
+            and len(chunk) >= 6
+            and chunk[-3:] == bytes(AL_TRAILER)
+        ):
+            # A complete self-contained frame (e.g. a 53 0A poll reply)
+            # arriving while a multi-chunk frame is still assembling:
+            # parse it WITHOUT clobbering the partial - interleaved
+            # replies were destroying every chunked 52 15 schedule
+            # read-back once the fast poll got quick enough to collide.
+            return buf, bytes(chunk)
         buf = bytearray(chunk)   # new frame (also drops any stale partial)
     elif buf:
         buf.extend(chunk)
