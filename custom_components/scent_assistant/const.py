@@ -409,6 +409,11 @@ CLOUD_POLL_INTERVAL_SECONDS = 60
 # the full refresh (schedule read-back 52 15 + oil 52 1E), whose answers
 # only change when someone edits config or the oil level moves.
 BLE_FAST_POLL_INTERVAL_SECONDS = 4
+# Mark entities unavailable when no BLE frame has arrived for this long.
+# With the 4s fast poll, a healthy link produces a frame every few
+# seconds; 60s of silence means the link is down or the device has
+# zombie-wedged - either way, showing stale values as live is a lie.
+BLE_UNAVAILABLE_AFTER_SECONDS = 60
 BLE_POLL_INTERVAL_SECONDS = 300
 
 # ---------------------------------------------------------------------------

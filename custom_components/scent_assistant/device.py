@@ -17,6 +17,7 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    BLE_UNAVAILABLE_AFTER_SECONDS,
     DeviceType,
     CLOUD_SCHEDULE_REFRESH_EVERY,
     DEFAULT_CONNECT_TIMEOUT,
@@ -91,6 +92,12 @@ class ScentDiffuserDevice:
         self._recent_notifications: list[str] = []
         # Carry buffer for multi-chunk Aroma-Link notifications.
         self._al_rx_buf = bytearray()
+        # Availability: monotonic timestamp of the last complete BLE frame
+        # (0.0 = never; async_setup stamps a startup grace). Entities go
+        # unavailable when this exceeds _ble_unavailable_after.
+        self._ble_last_rx: float = 0.0
+        self._ble_unavailable_after: float = BLE_UNAVAILABLE_AFTER_SECONDS
+        self._was_available: bool = True
         self._recent_commands: list[str] = []
         # BLE
         self._ble_address = ble_address
@@ -254,7 +261,40 @@ class ScentDiffuserDevice:
 
     @property
     def available(self) -> bool:
-        return self.connection_mode != "offline"
+        if self.connection_mode == "offline":
+            return False
+        if self._ble_address:
+            # No complete frame for too long = link down or the device has
+            # zombie-wedged. Report unavailable instead of silently serving
+            # stale state. _ble_last_rx == 0.0 only before async_setup's
+            # grace stamp; treat that window as available.
+            if self._ble_last_rx:
+                elapsed = asyncio.get_event_loop().time() - self._ble_last_rx
+                if elapsed > self._ble_unavailable_after:
+                    return False
+        return True
+
+    def _check_availability_transition(self) -> None:
+        """Fire entity updates (and a log line) when availability flips.
+
+        Entities only re-render on _notify_state_changed(), and a dead
+        link produces no notifications - so the poll timers call this to
+        push the unavailable state out.
+        """
+        now_available = self.available
+        if now_available == self._was_available:
+            return
+        self._was_available = now_available
+        if now_available:
+            _LOGGER.info("%s is reachable again", self._ble_name or self.name)
+        else:
+            _LOGGER.warning(
+                "%s has gone silent (no BLE frame for %.0fs) - marking "
+                "unavailable. If this persists, the device has likely "
+                "zombie-wedged and needs a power cycle.",
+                self._ble_name or self.name, self._ble_unavailable_after,
+            )
+        self._notify_state_changed()
 
     def register_state_callback(self, callback: callable) -> None:
         self._state_callbacks.append(callback)
@@ -658,6 +698,7 @@ class ScentDiffuserDevice:
             if frame is None:
                 return
             raw = frame
+        self._ble_last_rx = asyncio.get_event_loop().time()
         updates = self._protocol.parse_notification(raw)
         if not updates:
             return
@@ -1172,10 +1213,16 @@ class ScentDiffuserDevice:
             self._ble_last_failure_ts = asyncio.get_event_loop().time()
             async with self._ble_lock:
                 await self._teardown_ble_client(reason="fast-poll-failure")
+        finally:
+            self._check_availability_transition()
 
     async def refresh_state(self) -> None:
         """Refresh device state."""
         if self._ble_address:
+            if not self._ble_last_rx:
+                # Startup grace: the unavailability window starts now, not
+                # at the epoch.
+                self._ble_last_rx = asyncio.get_event_loop().time()
             if await self._ble_connect():
                 try:
                     await self._ble_send(self._protocol.build_query())
