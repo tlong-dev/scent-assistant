@@ -1259,7 +1259,12 @@ class ScentDiffuserDevice:
                 # Verify each answer landed and retry the missing ones.
                 for attempt in range(3):
                     if not await self._ble_connect():
-                        return
+                        # At startup the link is often still settling; a
+                        # failed connect is a reason to retry, not abort -
+                        # aborting here silently deferred the first oil and
+                        # schedule readbacks to the next 5-minute cycle.
+                        await asyncio.sleep(4.0)
+                        continue
                     started = asyncio.get_event_loop().time()
                     try:
                         need_schedule = self._last_schedule_rx <= 0 or attempt == 0
