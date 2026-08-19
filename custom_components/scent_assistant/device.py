@@ -102,6 +102,14 @@ class ScentDiffuserDevice:
         # None = hold the connection (never idle-disconnect); a number =
         # seconds of idle before a clean disconnect (connect-on-demand).
         self._ble_idle_disconnect: float | None = BLE_IDLE_DISCONNECT_SECONDS
+        # One query conversation at a time: the fast poll skips its tick
+        # while a full refresh is mid-flight, so single-frame poll replies
+        # cannot interleave with (and previously destroy) the multi-chunk
+        # 52 15 schedule reply.
+        self._ble_query_lock = asyncio.Lock()
+        # Monotonic timestamp of the last successfully parsed schedule
+        # read-back - lets refresh_state verify the reply actually landed.
+        self._last_schedule_rx: float = 0.0
         self._recent_commands: list[str] = []
         # BLE
         self._ble_address = ble_address
@@ -794,6 +802,7 @@ class ScentDiffuserDevice:
             changed = True
         if "schedule_enabled" in updates:
             self._state.schedule_enabled = updates["schedule_enabled"]
+            self._last_schedule_rx = asyncio.get_event_loop().time()
             changed = True
 
         # Derive oil days-remaining from the latest oil + schedule state.
@@ -1217,10 +1226,16 @@ class ScentDiffuserDevice:
         work_query = getattr(self._protocol, "build_all_work_query", None)
         if work_query is None:
             return
-        if not await self._ble_connect():
+        if self._ble_query_lock.locked():
+            # A full refresh (or a previous poll) is mid-conversation;
+            # skipping a 4s tick is cheaper than corrupting its chunked
+            # replies.
             return
         try:
-            await self._ble_send(work_query())
+            async with self._ble_query_lock:
+                if not await self._ble_connect():
+                    return
+                await self._ble_send(work_query())
         except (BleakError, asyncio.TimeoutError, OSError) as err:
             _LOGGER.debug("BLE fast poll failed on %s: %s", self._ble_name, err)
             self._ble_last_failure_ts = asyncio.get_event_loop().time()
@@ -1236,26 +1251,58 @@ class ScentDiffuserDevice:
                 # Startup grace: the unavailability window starts now, not
                 # at the epoch.
                 self._ble_last_rx = asyncio.get_event_loop().time()
-            if await self._ble_connect():
-                try:
-                    await self._ble_send(self._protocol.build_query())
-                    await asyncio.sleep(1.0)
-                    # Some protocols expose extra read-registers that the
-                    # device only reports on demand (e.g. Aroma-Link's oil
-                    # level). Query them too when the protocol offers one.
-                    oil_query = getattr(self._protocol, "build_oil_query", None)
-                    if oil_query is not None:
-                        await self._ble_send(oil_query())
-                        await asyncio.sleep(0.3)
-                    work_query = getattr(self._protocol, "build_all_work_query", None)
-                    if work_query is not None:
-                        await self._ble_send(work_query())
-                        await asyncio.sleep(0.3)
-                except (BleakError, asyncio.TimeoutError, OSError) as err:
-                    _LOGGER.debug("BLE refresh query failed on %s: %s", self._ble_name, err)
-                    self._ble_last_failure_ts = asyncio.get_event_loop().time()
-                    async with self._ble_lock:
-                        await self._teardown_ble_client(reason="refresh-failure")
+            async with self._ble_query_lock:
+                # Send-and-hope is not enough: replies (especially the
+                # multi-chunk 52 15 schedule read-back) can be lost during
+                # reconnect turbulence, and oil/schedule are only asked
+                # this often - a lost reply used to mean a 5-minute hole.
+                # Verify each answer landed and retry the missing ones.
+                for attempt in range(3):
+                    if not await self._ble_connect():
+                        return
+                    started = asyncio.get_event_loop().time()
+                    try:
+                        need_schedule = self._last_schedule_rx <= 0 or attempt == 0
+                        if need_schedule:
+                            self._last_schedule_rx = 0.0
+                            await self._ble_send(self._protocol.build_query())
+                            await asyncio.sleep(1.0)
+                        oil_query = getattr(self._protocol, "build_oil_query", None)
+                        if oil_query is not None and (
+                            attempt == 0 or self._state.oil_remaining is None
+                        ):
+                            await self._ble_send(oil_query())
+                            await asyncio.sleep(0.5)
+                        work_query = getattr(self._protocol, "build_all_work_query", None)
+                        if work_query is not None and attempt == 0:
+                            await self._ble_send(work_query())
+                            await asyncio.sleep(0.3)
+                    except (BleakError, asyncio.TimeoutError, OSError) as err:
+                        _LOGGER.debug("BLE refresh query failed on %s: %s", self._ble_name, err)
+                        self._ble_last_failure_ts = asyncio.get_event_loop().time()
+                        async with self._ble_lock:
+                            await self._teardown_ble_client(reason="refresh-failure")
+                        return
+                    schedule_ok = self._last_schedule_rx >= started or not hasattr(
+                        self._protocol, "build_query"
+                    )
+                    oil_ok = (
+                        getattr(self._protocol, "build_oil_query", None) is None
+                        or self._state.oil_remaining is not None
+                    )
+                    if schedule_ok and oil_ok:
+                        return
+                    _LOGGER.debug(
+                        "BLE refresh readback incomplete on %s "
+                        "(schedule_ok=%s oil_ok=%s), retry %d",
+                        self._ble_name, schedule_ok, oil_ok, attempt + 1,
+                    )
+                    await asyncio.sleep(2.0)
+                _LOGGER.warning(
+                    "BLE refresh on %s still missing readbacks after retries "
+                    "(oil=%s) - will try again next cycle",
+                    self._ble_name, self._state.oil_remaining,
+                )
             return
 
         if self.supports_cloud and self._cloud:
