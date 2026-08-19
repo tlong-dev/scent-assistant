@@ -1285,10 +1285,11 @@ class ScentDiffuserDevice:
         if self._ble_disconnect_task and not self._ble_disconnect_task.done():
             self._ble_disconnect_task.cancel()
         if self._ble_client:
-            try:
-                if self._ble_client.is_connected:
-                    await self._ble_client.disconnect()
-            except Exception:
-                pass
+            # Full teardown (stop_notify BEFORE disconnect) - a raw
+            # disconnect without unsubscribing is exactly the unclean
+            # close that wedges some firmwares into a zombie session
+            # (stops advertising, unreachable until power-cycled).
+            async with self._ble_lock:
+                await self._teardown_ble_client(reason="shutdown")
         if self._cloud and hasattr(self._cloud, "close"):
             await self._cloud.close()

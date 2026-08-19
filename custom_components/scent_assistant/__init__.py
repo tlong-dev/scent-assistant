@@ -7,6 +7,7 @@ from datetime import timedelta
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
@@ -108,6 +109,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Initial state query failed, will retry on first command: %s", err)
 
     hass.data[DOMAIN][entry.entry_id] = device
+
+    # Close the BLE session cleanly when HA stops. async_unload_entry only
+    # runs on entry unload/reload - NOT on core shutdown - so without this
+    # every HA restart drops the link uncleanly, which zombie-wedges some
+    # firmwares (device keeps believing it is connected, stops advertising,
+    # and stays unreachable until power-cycled).
+    async def _async_on_ha_stop(event) -> None:
+        await device.async_shutdown()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_on_ha_stop)
+    )
 
     # Cloud-mode devices have no push channel for autonomous state changes
     # (BLE devices push notifications when connected). Poll the cloud
