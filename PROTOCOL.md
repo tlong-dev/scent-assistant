@@ -173,6 +173,7 @@ A5 AA AC [xor_checksum] [payload...] C5 CC CA
 | 0x52 | 0x03 | Query | Fan status |
 | 0x52 | 0x0D | Query | Device info |
 | 0x52 | 0x15 | Query | All schedules |
+| 0x52 | 0x0A | Query | All work info |
 | 0x53 | 0x08 | Report | Power state |
 | 0x53 | 0x03 | Report | Fan state |
 | 0x53 | 0x09 | Report | Spray cycle status |
@@ -258,6 +259,26 @@ Phase: 0x00=idle, 0x01=spraying, 0x02=paused
 ```
 53 03 [state]   <- 0x10=on, 0x00=off
 ```
+
+**All work info (52 0A query / 53 0A report):**
+```
+[2..3] year (u16 BE)   [4] month  [5] day  [6] hh  [7] mm  [8] ss  [9] weekday
+[10] fan/lamp nibbles  [11] power on/off   [12] work status
+[13..14] work remaining (s, u16 BE)   [15..16] pause remaining (s, u16 BE)
+[17..18] start [hh mm]   [19..20] end [hh mm]   [21] air pump
+[22..27] MAC   [28..29] raw oil weight   [30] battery   [31] has-battery flag
+[32..] more capability flags
+```
+Offsets are relative to the payload (after the `A5 AA AC [xor]` header and
+before the `C5 CC CA` trailer). Verified live 2026-08-28 against a real
+AromaDD diffuser advertising "Smart.A5.WIFI": byte [11] flipped `01`->`00`
+when power was commanded off and back, with byte [10] stable at `0x01`
+across both states. Byte [12] (work status) was also observed flipping
+`01`->`00` in step with power - plausibly a work-active flag - but it is
+left unparsed pending further verification. Fan/lamp nibbles at [10]
+remain unparsed too: the app gets those from the dedicated 53 08 / 53 03
+frames instead, and the nibble encoding there conflicts with the 0x10
+fan value seen on the 53 03 path.
 
 ---
 
