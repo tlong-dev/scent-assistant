@@ -717,13 +717,32 @@ class ScentDiffuserDevice:
 
         changed = False
         if "power" in updates:
-            self._state.power = updates["power"]
+            new_power = updates["power"]
+            if new_power != self._state.power:
+                # Mirror the phase sync in set_power (below): power
+                # turning off always gates spraying, and power turning
+                # on from "off" starts back at idle rather than
+                # whatever stale phase was last reported.
+                if new_power is False:
+                    self._state.phase = "off"
+                elif self._state.phase == "off":
+                    self._state.phase = "idle"
+            self._state.power = new_power
             changed = True
         if "fan" in updates:
             self._state.fan = updates["fan"]
             changed = True
         if "phase" in updates:
-            self._state.phase = updates["phase"]
+            new_phase = updates["phase"]
+            if self._state.power is False and new_phase in ("spraying", "paused"):
+                # On this firmware the phase engine free-runs even while
+                # master power is off - it keeps cycling spraying/paused
+                # 53 09 pushes even though the atomizer is gated by
+                # power. Passing those through would report spray
+                # theater as real activity, so pin the status to "off"
+                # whenever we know power is off.
+                new_phase = "off"
+            self._state.phase = new_phase
             changed = True
         if "work_seconds" in updates:
             self._state.work_seconds = updates["work_seconds"]
