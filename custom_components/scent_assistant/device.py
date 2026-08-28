@@ -163,6 +163,9 @@ class ScentDiffuserDevice:
         # auto-off after this many seconds via a background task.
         self.momentary_seconds: int = DEFAULT_MOMENTARY_SECONDS
         self._momentary_task: asyncio.Task | None = None
+        # Whether the device was actually OFF before the in-flight
+        # momentary run started - see `momentary_diffuse`.
+        self._momentary_restore_off: bool = False
 
     # ------------------------------------------------------------------
     # Properties
@@ -717,13 +720,32 @@ class ScentDiffuserDevice:
 
         changed = False
         if "power" in updates:
-            self._state.power = updates["power"]
+            new_power = updates["power"]
+            if new_power != self._state.power:
+                # Mirror the phase sync in set_power (below): power
+                # turning off always gates spraying, and power turning
+                # on from "off" starts back at idle rather than
+                # whatever stale phase was last reported.
+                if new_power is False:
+                    self._state.phase = "off"
+                elif self._state.phase == "off":
+                    self._state.phase = "idle"
+            self._state.power = new_power
             changed = True
         if "fan" in updates:
             self._state.fan = updates["fan"]
             changed = True
         if "phase" in updates:
-            self._state.phase = updates["phase"]
+            new_phase = updates["phase"]
+            if self._state.power is False and new_phase in ("spraying", "paused"):
+                # On this firmware the phase engine free-runs even while
+                # master power is off - it keeps cycling spraying/paused
+                # 53 09 pushes even though the atomizer is gated by
+                # power. Passing those through would report spray
+                # theater as real activity, so pin the status to "off"
+                # whenever we know power is off.
+                new_phase = "off"
+            self._state.phase = new_phase
             changed = True
         if "work_seconds" in updates:
             self._state.work_seconds = updates["work_seconds"]
@@ -894,15 +916,35 @@ class ScentDiffuserDevice:
         return False
 
     async def momentary_diffuse(self) -> bool:
-        """Run the diffuser for `momentary_seconds`, then switch it off.
+        """Run the diffuser for `momentary_seconds`, then restore power.
 
         There is no native one-shot command in the Aroma-Link protocol
         (verified against the decompiled official app), so this is
-        power-on followed by a delayed power-off task. Pressing again
-        while a run is active restarts the countdown.
+        power-on followed by a delayed power-restore task. Pressing
+        again while a run is active restarts the countdown.
+
+        On V2-family firmware (see `set_schedule_enabled`'s docstring)
+        power == schedule-enable: the master power toggle gates the
+        device's own schedule, not just this one run. The old
+        unconditional power-off at the end of every run therefore
+        permanently disabled the diffuser's schedule until someone
+        noticed and flipped it back on by hand (a real 3.5-day outage,
+        2026-08-24 -> 28). We now only power off at the end if the
+        device was actually off before this run started - if it was
+        already on (i.e. the schedule was already enabled), we leave
+        it on and let the existing schedule keep running.
         """
         if self._momentary_task and not self._momentary_task.done():
             self._momentary_task.cancel()
+            # A press that restarts an already-active run should not
+            # re-sample: the first press already turned power on, so
+            # `self._state.power` is no longer a reliable signal of
+            # what it was before the *original* run started. Carry the
+            # first press's flag forward instead.
+        else:
+            # None/unknown treated as "was on" - never restore-off from
+            # an unknown prior state.
+            self._momentary_restore_off = self._state.power is False
         if not await self.set_power(True):
             return False
         self._momentary_task = asyncio.ensure_future(
@@ -912,6 +954,12 @@ class ScentDiffuserDevice:
 
     async def _momentary_off_later(self, delay: int) -> None:
         await asyncio.sleep(delay)
+        if not self._momentary_restore_off:
+            _LOGGER.debug(
+                "Momentary diffusion on %s: power was on before the "
+                "momentary run — leaving it on", self.name,
+            )
+            return
         if not await self.set_power(False):
             _LOGGER.warning(
                 "Momentary diffusion on %s: auto power-off failed — "

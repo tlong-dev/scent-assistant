@@ -506,11 +506,17 @@ class AromaLinkBleProtocol(BleProtocol):
         #   [17..18] start HH MM  [19..20] end HH MM  [21] air pump
         #   [22..27] MAC  [28..29] raw oil weight  [30] battery
         #   [31] has-battery flag  [32..] more capability flags
-        # We deliberately skip power/fan/lamp here: the official app gets
+        # Power byte [11] is now verified on live Smart.A5.WIFI firmware
+        # (AromaDD, 2026-08-28 capture): 0x01 while on, 0x00 while off,
+        # with [10] stable at 0x01 across both states — parsed below. Fan
+        # /lamp nibbles at [10] remain unparsed: the official app gets
         # those from the dedicated 53 08 / 53 03 frames too, and the
-        # nibble encoding at [10] conflicts with the 0x10 fan value seen
-        # on the 53 03 path — not worth the risk without a live device.
+        # nibble encoding there conflicts with the 0x10 fan value seen
+        # on the 53 03 path — not worth the risk without further live
+        # captures.
         if sub == AL_SUB_ALL_WORK_INFO and cmd in (AL_CMD_STATUS, AL_CMD_QUERY):
+            if len(payload) >= 12:
+                result["power"] = payload[11] == 0x01
             if len(payload) >= 17:
                 result["work_remaining"] = (payload[13] << 8) | payload[14]
                 result["pause_remaining"] = (payload[15] << 8) | payload[16]
